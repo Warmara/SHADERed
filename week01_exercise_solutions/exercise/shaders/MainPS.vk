@@ -1,0 +1,120 @@
+#version 330
+
+uniform vec2 uResolution;
+uniform float uTime;
+
+out vec4 outColor;
+
+float checkerboard(vec2 uv)
+{
+    // Calculate whether the integer parts (before the decimal point)
+    // of the given coordinates are even or odd.
+    bvec2 even = bvec2(int(uv.x) % 2 == 0, int(uv.y) % 2 == 0);
+    
+    // Logical XOR of the evenness of the coordinate components
+    // i.e. true if only one of the components is even, false otherwise.
+    // Convert result to float: true becomes 1.0 and false becomes 0.0
+    return float(even.x ^^ even.y);
+}
+
+float circle(vec2 uv, vec2 center, float radius)
+{
+    // The analytical equation for a filled circle (a disc) is
+    // ||point - center || < radius
+    // We convert this truth value to a floating point number so
+    // for points inside the circle we get 1.0 and outside 0.0
+    return float(length(uv - center) < radius);
+}
+
+float mandelbrot_normalized(vec2 uv, int max_iterations)
+{
+    // https://en.wikipedia.org/wiki/Mandelbrot_set
+    vec2 z = vec2(0.0);
+    int iteration = 0;
+    for (; length(z) < 2.0 && iteration < max_iterations; ++iteration)
+    {
+        z = vec2(
+            z.x*z.x - z.y*z.y + uv.x,
+            2.0*z.x*z.y + uv.y
+        );
+    }
+    
+    // Simplest solution: just return the final number of iterations taken
+    // (normalized to 0..1 range for convenience)
+    //return float(iteration) / float(max_iterations);
+    
+    // Smoother result, see https://en.wikipedia.org/wiki/Plotting_algorithms_for_the_Mandelbrot_set#Continuous_(smooth)_coloring
+    if (iteration < max_iterations)
+    {
+        float log_zn = log(dot(z, z)) / 2.0;
+        float nu = log(log_zn / log(2)) / log(2);
+        return (float(iteration + 1) - nu) / float(max_iterations);
+    }
+    
+    return 1.0;
+}
+
+void main()
+{
+    // The GPU calls the main() function once for each fragment (pixel) it draws
+    // to the screen. gl_FragCoord holds the position of the current fragment counted
+    // in screen pixels. Fractional coordinates happen when there are many
+    // fragments per pixel (i.e. multisampling).
+    //
+    // Divide the pixel coordinates by the viewport resolution to normalize our
+    // coordinates to a convenient 0..1 range. This does not account for the aspect ratio
+    // of the viewport so if the viewport is not a square things will look squished.
+    // However for the purposes of this exercise this keeps things a little bit simpler.
+    vec2 uv = gl_FragCoord.xy/uResolution;
+
+
+    // Part 1: Checkerboard
+
+    // Pick two nice colors for the checkerboard.
+    // The formula used here does not really matter as long as you end up with a vec4
+    // representing the red, green, blue and alpha channels. For now just set alpha to 1.0. 
+    // 
+    // Animation is simply a change of the output as a function of time.
+    // SHADERed provides us a time value in seconds (see controls at the bottom
+    // of the preview window), so let's use that to calculate a color that changes over time.
+    vec4 checkerboard_a = vec4(0.5 + 0.5*cos(uTime+2*3.14*uv.x), 0.5 + 0.5 * sin(uTime+2*3.14*uv.y), 0.0, 1.0);
+    // Let's make the other color simply the inverse of the first
+    // Note that this is not simply the negated value even though it is often called "negative" in photography.
+    vec4 checkerboard_b = vec4(vec3(1.0)-checkerboard_a.rgb, 1.0);
+
+    // Compute which kind of square the current fragment (pixel) belongs to
+    // uv is scaled so the squares are bigger
+    float checkerboard_mask = checkerboard(uv*8);
+    // Interpolate between checkerboard colors a and b based on the mask.
+    // Since the mask is always 0.0 or 1.0, we will only see either a or b, no in between results.
+    outColor = mix(checkerboard_a, checkerboard_b, checkerboard_mask);
+
+    // Slightly dim the checkerboard so it is less distracting.
+    //
+    // You can change the value of 'out' variables as many times as you like,
+    // the final output will be whatever value is stored in the variable when
+    // the end of the main function is reached.
+    //outColor.rgb *= 0.5;
+    
+    
+    // Part 2: Filled Circle
+    
+    // Again, pick a fill color and a position for the circle
+    vec4 circle_color = vec4(1.0, 1.0, 0.0, 1.0);
+    vec2 circle_position = vec2(0.5 + 0.25 * sin(uTime), 0.5 + 0.25 * cos(uTime));
+    // Calculate whether the current fragment is inside (1.0) or outside (0.0)
+    // of the circle.
+    float circle_mask = circle(uv, circle_position, 0.125);
+    // If the current fragment is inside the circle,
+    // replace the color we had computed earlier with the color of the circle
+    outColor = mix(outColor, circle_color, circle_mask);
+    
+    
+    // Bonus/Part 3:
+    
+    float mandelbrot = mandelbrot_normalized((uv - vec2(0.75, 0.5)) / 0.5, 32);
+    // Apply a curve to the normalized mandelbrot value to get the interior value back down to 0.0
+    mandelbrot = 1.0 - pow((2.0 * mandelbrot - 1.0), 2.0);
+    // Use the mandelbrot value to blend between the existing color and its inverse
+    outColor = mix(outColor, vec4(vec3(1.0) - outColor.rgb, 1.0), mandelbrot);
+}
